@@ -1,0 +1,2 @@
+# solus.api
+A short self contained parse.bot alternative. Can generate any link on the internet into a mini version compatible with almost every language
