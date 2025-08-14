@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>solus.api.bot</title>
+<style>
+  :root{
+    --bg:#ffffff;--panel:#ffffff;--text:#000000;--muted:#000000;
+    --border:#000000;--code:#f9f9f9;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  *{box-sizing:border-box}
+  .wrap{max-width:1200px;margin:0 auto;padding:20px}
+  .grid{display:grid;grid-template-columns:1.05fr 1fr;gap:16px}
+  @media (max-width:980px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+  .head{padding:14px;border-bottom:1px solid var(--border);font-weight:700;
+        color:var(--text);font-size:20px;letter-spacing:.2px}
+  .body{padding:14px}
+  label{display:block;font-size:12.5px;color:var(--text);font-weight:700;margin-bottom:6px}
+  input,select,button{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);
+                      font:inherit;color:var(--text);background:#fff}
+  button{cursor:pointer;background:#000;color:#fff;border:1px solid #000}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  select{appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg fill='none' stroke='%23000' stroke-width='2' viewBox='0 0 24 24'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 10px center;background-size:16px}
+  .row{display:grid;gap:10px;margin-bottom:12px}
+  .two{grid-template-columns:1fr 1fr}
+  @media (max-width:680px){.two{grid-template-columns:1fr}}
+  .status{font-size:13px}
+  .status.ok{color:#000;font-weight:700}
+  .status.bad{color:#000;font-weight:700}
+  pre{margin:0;max-height:70vh;overflow:auto;padding:14px;border-radius:12px;
+      background:var(--code);border:1px solid var(--border)}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.8px;
+       white-space:pre;color:#000}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="grid">
+    <!-- LEFT: Input -->
+    <div class="card">
+      <div class="head">solus.api.bot</div>
+      <div class="body">
+        <div class="row">
+          <label for="url">Target URL</label>
+          <input id="url" type="url" placeholder="https://example.com" autocomplete="url" />
+        </div>
+        <div class="row">
+          <label for="lang">Output Language</label>
+          <select id="lang">
+            <option value="client-js">Client JS</option>
+            <option value="usage-js">Usage JS</option>
+            <option value="python">Python</option>
+            <option value="cpp">C++</option>
+            <option value="html">HTML</option>
+            <option value="curl">cURL</option>
+          </select>
+        </div>
+        <div class="row two">
+          <div>
+            <label for="depth">Scan depth</label>
+            <select id="depth">
+              <option value="0">Homepage only</option>
+              <option value="1">Homepage + links</option>
+              <option value="2">Homepage + 2 levels</option>
+            </select>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button id="build">Build API</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="status" id="status"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Output -->
+    <div class="card">
+      <div class="head">Reusable API</div>
+      <div class="body">
+        <button id="copy" disabled style="margin-bottom:10px">Copy</button>
+        <pre><code id="code"></code></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const RELAY='https://solusbotapi.adriankatsugachi.workers.dev/?url=';
+
+  const $=id=>document.getElementById(id);
+  const urlEl=$('url'), langEl=$('lang'), depthEl=$('depth'), buildBtn=$('build'), statusEl=$('status');
+  const codeEl=$('code'), copyBtn=$('copy');
+  let snippets={};
+
+  function setStatus(t,k){statusEl.textContent=t||'';statusEl.className='status'+(k?(' '+k):'')}
+  function normalize(u){try{if(!/^https?:\/\//i.test(u))u='https://'+u.replace(/^\/+/,'');const x=new URL(u);x.hash='';return x.toString()}catch{return''}}
+  function wrap(u){return RELAY+encodeURIComponent(u)}
+
+  async function fetchText(target){
+    const res=await fetch(wrap(target));
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    return res.text();
+  }
+  function parseHTML(html){return new DOMParser().parseFromString(html,'text/html')}
+  function extractLinks(doc,origin){
+    const s=new Set();
+    doc.querySelectorAll('a[href]').forEach(a=>{
+      const href=a.getAttribute('href'); if(!href) return;
+      try{const u=new URL(href,origin); if(u.origin!==origin) return; u.hash=''; s.add(u.pathname+(u.search||''))}catch{}
+    });
+    return Array.from(s);
+  }
+  function extractForms(doc,origin){
+    const out=[];
+    Array.from(doc.forms).forEach((f,i)=>{
+      const method=(f.getAttribute('method')||'GET').toUpperCase();
+      let action;try{action=new URL(f.getAttribute('action')||'.',origin).toString()}catch{action=origin}
+      const fields=[];
+      f.querySelectorAll('input,textarea,select').forEach(inp=>{
+        const name=inp.getAttribute('name')||inp.id; if(!name) return;
+        const type=(inp.getAttribute('type')||(inp.tagName==='TEXTAREA'?'textarea':inp.tagName==='SELECT'?'select':'text')).toLowerCase();
+        fields.push({name,type,required:inp.hasAttribute('required')});
+      });
+      const id=f.getAttribute('id')||f.getAttribute('name')||('form_'+(i+1));
+      out.push({id,method,action,fields});
+    });
+    return out;
+  }
+  function sniffJson(doc,origin){
+    const s=new Set();
+    function add(v){
+      if(!v) return;
+      const re=/https?:\/\/[^\s"'<>]+/g; let m;
+      while((m=re.exec(v))){
+        try{const u=new URL(m[0],origin);
+          if(u.origin!==origin) continue;
+          if(/\/api\/|\.json(\?|$)|\/graphql/i.test(u.pathname+u.search)){u.hash=''; s.add(u.pathname+(u.search||''))}
+        }catch{}
+      }
+    }
+    doc.querySelectorAll('[src],[href]').forEach(n=>{add(n.getAttribute('src'));add(n.getAttribute('href'))});
+    Array.from(doc.scripts).forEach(scp=>{if(!scp.src)add(scp.textContent||'')});
+    return Array.from(s);
+  }
+
+  function makeClient(baseUrl,forms,links,jsonPaths){
+    const formsMap={};
+    forms.forEach(f=>{
+      formsMap[f.id]={method:f.method,action:f.action,fields:f.fields}
+    });
+
+    return `export function createClient(baseUrl='${baseUrl}'){
+  const RELAY='${RELAY}';
+  const wrap=(u)=>RELAY+encodeURIComponent(u);
+
+   async function request(path,init={}){
+    const real=new URL(path||'/',baseUrl).toString();
+    const res=await fetch(wrap(real),{
+      ...init,
+      headers:{'Accept':'*/*',...(init.headers||{})},
+      redirect:'follow',
+      credentials:'omit',
+      mode:'cors'
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status+' for '+path);
+    return res;
+  }
+
+  return {
+    async get(p='/'){
+      const r=await request(p,{method:'GET'});
+      const ct=r.headers.get('content-type')||'';
+      return ct.includes('application/json') ? r.json() : r.text();
+    },
+    async getJson(p){
+      const r=await request(p,{method:'GET',headers:{'Accept':'application/json'}});
+      return r.json();
+    },
+    async forms(){return ${JSON.stringify(formsMap)}},
+    async submit(id,fields={}){
+      const f=(await this.forms())[id];
+      if(!f) throw new Error('Unknown form: '+id);
+      const url=new URL(f.action||'/',baseUrl).toString();
+      const params=new URLSearchParams();
+      for(const k of Object.keys(fields)) params.set(k,fields[k]);
+      const m=(f.method||'GET').toUpperCase();
+      if(m==='GET'){
+        const u=new URL(url);
+        for(const [k,v] of params) u.searchParams.set(k,v);
+        return (await request(u.toString(),{method:'GET'})).text();
+      } else {
+        return (await request(url,{
+          method:m,
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:params.toString()
+        })).text();
+      }
+    },
+       links:${JSON.stringify(links)},
+    json:${JSON.stringify(jsonPaths)}
+  }
+}`;
+  }
+
+  function makeUsageJS(baseUrl){
+    return `import { createClient } from './client.js'
+const api=createClient('${baseUrl}')
+const home=await api.get('/')
+console.log(home)`;
+  }
+
+  function makePython(baseUrl){
+    return `import requests, urllib.parse
+BASE='${baseUrl}'
+RELAY='${RELAY}'
+def wrap(u): 
+    return RELAY + urllib.parse.quote(u, safe='')
+def get(path='/'):
+    url = urllib.parse.urljoin(BASE, path)
+    r = requests.get(wrap(url))
+    r.raise_for_status()
+    return r.text
+def get_json(path):
+    url = urllib.parse.urljoin(BASE, path)
+    r = requests.get(wrap(url), headers={'Accept':'application/json'})
+    r.raise_for_status()
+    return r.json()
+print(get('/'))`;
+  }
+
+  function makeCpp(baseUrl){
+    return `#include <iostream>
+#include <curl/curl.h>
+int main(){
+    CURL *curl=curl_easy_init();
+    if(curl){
+        std::string url="${RELAY}"+std::string("${encodeURIComponent(baseUrl)}");
+        curl_easy_setopt(curl,CURLOPT_URL,url.c_str());
+        CURLcode res=curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+    }
+    return 0;
+}`;
+  }
+
+  function makeHtml(baseUrl){
+    return `<!DOCTYPE html>
+<html>
+<body>
+<script>
+fetch('${RELAY}${encodeURIComponent(baseUrl)}')
+  .then(r=>r.text())
+  .then(t=>console.log(t));
+<\/script>
+</body>
+</html>`;
+  }
+
+  function makeCurl(baseUrl){
+    return `curl "${RELAY}${encodeURIComponent(baseUrl)}" -H "Accept: text/html"`;
+  }
+
+  async function crawl(base, depth){
+    const visited=new Set(), queue=[{url:base,d:0}], pages=[];
+    while(queue.length){
+      const {url,d}=queue.shift();
+      if(visited.has(url)) continue;
+      visited.add(url);
+      try{
+        const html=await fetchText(url);
+        const doc=parseHTML(html);
+        pages.push({url,doc});
+        if(d<depth){
+          extractLinks(doc, base).forEach(p=>{
+            const next=new URL(p, base).toString();
+            if(!visited.has(next)) queue.push({url:next,d:d+1});
+          });
+        }
+        await new Promise(r=>setTimeout(r,60));
+      }catch(e){}
+    }
+    return pages;
+  }
+
+  async function build(){
+    const base=normalize(urlEl.value.trim());
+    if(!base){setStatus('Enter a valid URL','bad');return}
+    setStatus('Building…');
+    codeEl.textContent=''; copyBtn.disabled=true;
+
+    try{
+      const depth=parseInt(depthEl.value,10)||0;
+      const pages=await crawl(base, depth);
+      if(!pages.length) throw new Error('Unable to fetch via relay');
+
+      const allLinks=new Set(), allJson=new Set(), forms=[];
+      for(const {doc} of pages){
+        extractLinks(doc, base).forEach(p=>allLinks.add(p));
+        extractForms(doc, base).forEach(f=>forms.push(f));
+        sniffJson(doc, base).forEach(j=>allJson.add(j));
+      }
+      const links=Array.from(allLinks), json=Array.from(allJson);
+
+      snippets={
+        'client-js': makeClient(base, forms, links, json),
+        'usage-js': makeUsageJS(base),
+        'python': makePython(base),
+        'cpp': makeCpp(base),
+        'html': makeHtml(base),
+        'curl': makeCurl(base)
+      };
+
+      const sel=langEl.value;
+      codeEl.textContent=snippets[sel]||'';
+      copyBtn.disabled=false;
+      setStatus('API ready','ok');
+    }catch(e){
+      setStatus('Failed: '+(e.message||e),'bad');
+    }
+  }
+
+  buildBtn.addEventListener('click', build);
+  langEl.addEventListener('change',()=>{ 
+    const sel=langEl.value;
+    codeEl.textContent=snippets[sel]||'';
+    copyBtn.disabled=!snippets[sel];
+  });
+
+  copyBtn.addEventListener('click',async()=>{
+    try{
+      await navigator.clipboard.writeText(codeEl.textContent);
+      copyBtn.textContent='Copied';
+      setTimeout(()=>copyBtn.textContent='Copy',900);
+    }catch{}
+  });
+
+})();
+</script>
+</body>
+</html>
