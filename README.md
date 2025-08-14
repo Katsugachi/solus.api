@@ -1,4 +1,4 @@
 # Solus.Api
-A short self contained parse.bot alternative. Can generate any link on the internet into a mini version compatible with almost every language
+A short self contained parse.bot alternative. Can create a reuseable API for sites in seconds not minutes.
 _PSA: Still in testing. Expect Errors_
 https://katsugachi.github.io/solus.api/
